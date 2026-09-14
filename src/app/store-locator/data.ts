@@ -20,6 +20,7 @@ export interface Node {
   humidity: number;
   lastPMS: string;
   siteOwner: SiteOwner;
+  offlineSince?: string;
   cctv: Cctv[];
   lat: number;
   lng: number;
@@ -147,6 +148,7 @@ export const nodes: Node[] = [
     humidity: 74,
     lastPMS: "2025-04-18",
     siteOwner: "coloc",
+    offlineSince: "2026-09-14T09:12:00Z",
     cctv: [],
     lat: 7.079,
     lng: 125.6129,

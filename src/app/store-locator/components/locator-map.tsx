@@ -277,6 +277,19 @@ function CctvSection({
   );
 }
 
+function offlineDuration(since: string): string {
+  const minutes = Math.floor(
+    Math.max(0, Date.now() - new Date(since).getTime()) / 60_000,
+  );
+  if (minutes <= 0) return "0m";
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
 export function LocatorMap({
   nodes,
   selectedId,
@@ -286,6 +299,12 @@ export function LocatorMap({
 }: LocatorMapProps) {
   const selected = nodes.find((node) => node.id === selectedId);
   const [cctvCards, setCctvCards] = useState<CctvCardData[]>([]);
+  const [, setNow] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const openCctv = (node: SiteNode, cctv: Cctv) => {
     const id = `${node.id}:${cctv.name}`;
@@ -344,14 +363,21 @@ export function LocatorMap({
             <p className="text-popover-foreground pr-5 font-medium">
               {selected.name}
             </p>
-            <span className="mt-1 flex items-center gap-1.5 text-xs font-medium">
+            <span
+              className={cn(
+                "mt-1 flex items-center gap-1.5 text-xs font-medium",
+                selected.status === "offline" && "font-bold text-red-500",
+              )}
+            >
               <span
                 className={cn(
                   "size-2.5 rounded-full",
                   statusDot(selected.status),
                 )}
               />
-              {statusLabel(selected.status)}
+              {selected.status === "offline"
+                ? `offline: ${offlineDuration(selected.offlineSince ?? "")}`
+                : statusLabel(selected.status)}
             </span>
 
             <div className="text-muted-foreground mt-2.5 space-y-1.5 text-xs tabular-nums">
@@ -370,8 +396,8 @@ export function LocatorMap({
               </p>
               <p className="flex items-center gap-1.5">
                 <Thermometer className="size-3.5 shrink-0" />
-                {selected.temperature.toFixed(1)} °C · Humidity{" "}
-                {selected.humidity}%
+                {selected.temperature.toFixed(1)} °C ·{" "}
+                {selected.humidity}% H
               </p>
             </div>
 
