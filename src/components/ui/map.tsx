@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type Ref,
 } from "react";
 import { createPortal } from "react-dom";
 import { X, Minus, Plus, Locate, Maximize, Loader2 } from "lucide-react";
@@ -1024,6 +1025,8 @@ type MapPopupProps = {
   className?: string;
   /** Show a close button in the popup (default: false) */
   closeButton?: boolean;
+  /** Ref to the rendered popup DOM node (for measuring its position) */
+  popupRef?: Ref<HTMLDivElement>;
 } & Omit<PopupOptions, "className" | "closeButton">;
 
 function MapPopup({
@@ -1033,6 +1036,7 @@ function MapPopup({
   children,
   className,
   closeButton = false,
+  popupRef,
   ...popupOptions
 }: MapPopupProps) {
   const { map } = useMap();
@@ -1091,6 +1095,7 @@ function MapPopup({
 
   return createPortal(
     <div
+      ref={popupRef}
       className={cn(
         "bg-popover text-popover-foreground relative max-w-62 rounded-md border p-3 shadow-md",
         "animate-in fade-in-0 zoom-in-95 duration-200 ease-out",

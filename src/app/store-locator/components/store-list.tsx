@@ -4,8 +4,14 @@ import { useEffect, useRef } from "react";
 import {
   Building2,
   CalendarDays,
+  Droplets,
+  Fuel,
+  Gauge,
   MapPin,
   Search,
+  Snowflake,
+  Thermometer,
+  Zap,
 } from "lucide-react";
 
 import {
@@ -22,16 +28,29 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
+  attentionIssues,
   clusterByRegion,
+  deriveStatus,
   formatLastPMS,
+  offlineDuration,
   ownerLabel,
   statusDot,
   statusLabel,
+  type AttentionIssue,
   type Node as SiteNode,
   type SiteStatus,
 } from "../data";
 
 const STATUSES: SiteStatus[] = ["online", "offline", "attention"];
+
+const ISSUE_ICON: Record<AttentionIssue, typeof Fuel> = {
+  genset: Fuel,
+  lowVoltage: Zap,
+  lowFuel: Gauge,
+  highTemp: Thermometer,
+  humidity: Droplets,
+  coolingOff: Snowflake,
+};
 
 interface StoreListProps {
   nodes: SiteNode[];
@@ -64,7 +83,7 @@ export function StoreList({
   }, [selectedId]);
 
   return (
-    <Sidebar collapsible="offcanvas">
+    <Sidebar collapsible="offcanvas" variant="floating">
       <SidebarHeader className="gap-3 p-4">
         <div>
           <h2 className="text-foreground text-lg font-semibold tracking-tight">
@@ -127,6 +146,7 @@ export function StoreList({
             <SidebarMenu className="gap-1">
               {nodes.map((node) => {
                 const active = node.id === selectedId;
+                const status = deriveStatus(node);
                 return (
                   <SidebarMenuItem key={node.id}>
                     <SidebarMenuButton
@@ -151,11 +171,39 @@ export function StoreList({
                         <span className="flex items-center gap-1.5 text-xs font-medium">
                           <span
                             className={cn(
-                              "size-2.5 rounded-full",
-                              statusDot(node.status),
+                              "rounded-full px-2 py-0.5",
+                              statusDot(status),
+                              status === "offline" && "font-bold",
                             )}
-                          />
-                          {statusLabel(node.status)}
+                          >
+                            {status === "attention" ? (
+                              <span className="text-black">
+                                {statusLabel(status)}
+                              </span>
+                            ) : (
+                              <span className="text-white">
+                                {statusLabel(status)}
+                              </span>
+                            )}
+                          </span>
+                          {status === "attention" && (
+                            <span className="flex items-center gap-1">
+                              {attentionIssues(node).map((issue) => {
+                                const Icon = ISSUE_ICON[issue];
+                                return (
+                                  <Icon
+                                    key={issue}
+                                    className="text-white size-3.5"
+                                  />
+                                );
+                              })}
+                            </span>
+                          )}
+                          {status === "offline" && (
+                            <span className="text-white font-bold">
+                              {offlineDuration(node.lastDataAt)}
+                            </span>
+                          )}
                         </span>
                       </div>
                       <div className="text-muted-foreground mt-2 space-y-1.5 text-xs font-normal tabular-nums">
