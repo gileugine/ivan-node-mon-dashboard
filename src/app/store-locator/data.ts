@@ -151,6 +151,10 @@ export function criticalDetails(node: Node): string[] {
   return criticalIssues(node).map((issue) => CRITICAL_DETAIL[issue]);
 }
 
+export function criticalLabels(node: Node): string[] {
+  return criticalIssues(node).map((issue) => CRITICAL_ISSUE_LABEL[issue]);
+}
+
 export const formatDetectedAt = (date: Date) => ({
   date: date.toLocaleDateString("en-US", {
     month: "short",

@@ -61,11 +61,10 @@ import { cn } from "@/lib/utils";
 import {
   coolingLabel,
   criticalDetails,
+  criticalLabels,
   deriveStatus,
   formatDetectedAt,
   hourlySeries,
-  nodeNotifications,
-  nodeRecoveryMinutes,
   offlineDetectedAt,
   offlineDuration,
   seriesLabel,
@@ -823,13 +822,11 @@ function StatusToastCard({
   onPointerUp?: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerCancel?: (e: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
-  const [recoveryAt] = useState(
-    () => Date.now() + nodeRecoveryMinutes(node) * 60_000,
-  );
-  const remaining = Math.max(0, recoveryAt - now);
-  const hours = Math.floor(remaining / 3_600_000);
-  const minutes = Math.floor((remaining % 3_600_000) / 60_000);
-  const seconds = Math.floor((remaining % 60_000) / 1000);
+  const detectedAt = offlineDetectedAt(node).getTime();
+  const elapsed = Math.max(0, now - detectedAt);
+  const hours = Math.floor(elapsed / 3_600_000);
+  const minutes = Math.floor((elapsed % 3_600_000) / 60_000);
+  const seconds = Math.floor((elapsed % 60_000) / 1000);
   const { date, time } = formatDetectedAt(offlineDetectedAt(node));
   const cardRef = useRef<HTMLDivElement>(null);
   const onHeightChangeRef = useRef(onHeightChange);
@@ -858,7 +855,7 @@ function StatusToastCard({
         kind === "offline" && "border-red-500/50",
         className,
       )}
-      style={style}
+      style={{ ...style, borderWidth: kind === "offline" ? 2 : undefined }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -1564,7 +1561,64 @@ export function LocatorMap({
     return () => clearInterval(id);
   }, []);
 
-  const notifications = useMemo(() => nodeNotifications(nodes), [nodes]);
+  const nodesRef = useRef(nodes);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  });
+
+  const lastStatusRef = useRef<Record<string, SiteStatus>>({});
+  const seededRef = useRef(false);
+  const [eventLog, setEventLog] = useState<NodeNotification[]>([]);
+
+  const notifications = eventLog;
+  const buildNotification = useCallback(
+    (node: SiteNode, status: SiteStatus): NodeNotification => {
+      const detectedAt =
+        status === "offline" ? offlineDetectedAt(node) : new Date();
+      return {
+        id: `${node.id}:${status}:${detectedAt.getTime()}`,
+        nodeId: node.id,
+        nodeName: node.name,
+        status,
+        detectedAt,
+        detail:
+          status === "offline"
+            ? "Node went offline"
+            : status === "online"
+              ? "Node went online from offline state"
+              : criticalLabels(node).join(", "),
+      };
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!seededRef.current) {
+      seededRef.current = true;
+      const initial: NodeNotification[] = [];
+      for (const node of nodesRef.current) {
+        const status = deriveStatus(node);
+        lastStatusRef.current[node.id] = status;
+        if (status === "offline" || status === "critical") {
+          initial.push(buildNotification(node, status));
+        }
+      }
+      initial.sort(
+        (a, b) => b.detectedAt.getTime() - a.detectedAt.getTime(),
+      );
+      setEventLog(initial);
+      return;
+    }
+
+    for (const node of nodesRef.current) {
+      const status = deriveStatus(node);
+      const prev = lastStatusRef.current[node.id];
+      if (prev === status) continue;
+      lastStatusRef.current[node.id] = status;
+      setEventLog((log) => [buildNotification(node, status), ...log]);
+    }
+  }, [nodes, buildNotification]);
 
   const openCctv = (node: SiteNode, cctv: Cctv) => {
     const id = `${node.id}:${cctv.name}`;
