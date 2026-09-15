@@ -1,4 +1,4 @@
-export type SiteStatus = "online" | "offline" | "attention";
+export type SiteStatus = "online" | "offline" | "critical";
 export type PowerSource = "commercial" | "genset";
 export type SiteOwner = "infinivan" | "coloc";
 export type CoolingStatus = "on" | "off";
@@ -33,7 +33,7 @@ export interface Node {
 export const MAP_CENTER: [number, number] = [122.3, 12.5];
 
 export const statusLabel = (status: SiteStatus) =>
-  status === "online" ? "Online" : status === "offline" ? "Offline" : "Attention";
+  status === "online" ? "Online" : status === "offline" ? "Offline" : "Critical";
 
 export const statusDot = (status: SiteStatus) =>
   status === "online"
@@ -41,6 +41,16 @@ export const statusDot = (status: SiteStatus) =>
     : status === "offline"
       ? "bg-red-500"
       : "bg-yellow-500";
+
+// When the node was last seen (the detection time for its offline status).
+export function offlineDetectedAt(node: Node): Date {
+  return new Date(new Date(node.lastDataAt).getTime() + STALE_MS);
+}
+
+// Deterministic minutes from now until the node is expected to recover.
+export function nodeRecoveryMinutes(node: Node): number {
+  return 2 + (hashString(node.id) % 11);
+}
 
 export const powerLabel = (source: PowerSource) =>
   source === "commercial" ? "Commercial power" : "Genset";
@@ -80,16 +90,16 @@ export function isStale(node: Node): boolean {
 
 export function deriveStatus(node: Node): SiteStatus {
   if (isStale(node)) return "offline";
-  if (node.powerSource === "genset") return "attention";
-  if (node.powerSource === "commercial" && node.voltage < 220) return "attention";
-  if (node.fuelLevel < 15) return "attention";
-  if (node.temperature > 30) return "attention";
-  if (node.humidity > 70 || node.humidity < 30) return "attention";
-  if (node.cooling === "off") return "attention";
+  if (node.powerSource === "genset") return "critical";
+  if (node.powerSource === "commercial" && node.voltage < 220) return "critical";
+  if (node.fuelLevel < 15) return "critical";
+  if (node.temperature > 30) return "critical";
+  if (node.humidity > 70 || node.humidity < 30) return "critical";
+  if (node.cooling === "off") return "critical";
   return "online";
 }
 
-export type AttentionIssue =
+export type CriticalIssue =
   | "genset"
   | "lowVoltage"
   | "lowFuel"
@@ -97,8 +107,8 @@ export type AttentionIssue =
   | "humidity"
   | "coolingOff";
 
-export function attentionIssues(node: Node): AttentionIssue[] {
-  const issues: AttentionIssue[] = [];
+export function criticalIssues(node: Node): CriticalIssue[] {
+  const issues: CriticalIssue[] = [];
   if (node.powerSource === "genset") issues.push("genset");
   if (node.powerSource === "commercial" && node.voltage < 220) issues.push("lowVoltage");
   if (node.fuelLevel < 15) issues.push("lowFuel");
@@ -119,7 +129,7 @@ export interface NodeNotification {
   detail: string;
 }
 
-const ATTENTION_ISSUE_LABEL: Record<AttentionIssue, string> = {
+const CRITICAL_ISSUE_LABEL: Record<CriticalIssue, string> = {
   genset: "Running on generator power",
   lowVoltage: "Grid voltage below 220 V",
   lowFuel: "Fuel level below 15%",
@@ -127,6 +137,19 @@ const ATTENTION_ISSUE_LABEL: Record<AttentionIssue, string> = {
   humidity: "Humidity out of recommended range",
   coolingOff: "Cooling system is off",
 };
+
+const CRITICAL_DETAIL: Record<CriticalIssue, string> = {
+  genset: "running on genset",
+  lowVoltage: "low voltage",
+  lowFuel: "low fuel",
+  highTemp: "high room temperature",
+  humidity: "High room humidity",
+  coolingOff: "air cooling unit is off",
+};
+
+export function criticalDetails(node: Node): string[] {
+  return criticalIssues(node).map((issue) => CRITICAL_DETAIL[issue]);
+}
 
 export const formatDetectedAt = (date: Date) => ({
   date: date.toLocaleDateString("en-US", {
@@ -140,7 +163,7 @@ export const formatDetectedAt = (date: Date) => ({
   }),
 });
 
-// Deterministic, latest-first timeline of online/attention/offline notifications.
+// Deterministic, latest-first timeline of online/critical/offline notifications.
 export function nodeNotifications(siteNodes: Node[]): NodeNotification[] {
   const list: NodeNotification[] = [];
   for (const node of siteNodes) {
@@ -164,17 +187,17 @@ export function nodeNotifications(siteNodes: Node[]): NodeNotification[] {
         detectedAt: new Date(recoveredAt),
         detail: "Node went online from offline state",
       });
-    } else if (status === "attention") {
-      const issues = attentionIssues(node);
+    } else if (status === "critical") {
+      const issues = criticalIssues(node);
       const base = 120 + (hashString(node.id) % 1800);
       issues.forEach((issue, index) => {
         list.push({
           id: `${node.id}:${issue}`,
           nodeId: node.id,
           nodeName: node.name,
-          status: "attention",
+          status: "critical",
           detectedAt: new Date(Date.now() - (base + index * 23) * 1000),
-          detail: ATTENTION_ISSUE_LABEL[issue],
+          detail: CRITICAL_ISSUE_LABEL[issue],
         });
       });
     }

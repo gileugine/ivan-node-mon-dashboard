@@ -8,6 +8,7 @@ import {
   Fuel,
   Gauge,
   MapPin,
+  PanelLeftClose,
   Search,
   Snowflake,
   Thermometer,
@@ -23,27 +24,28 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarSeparator,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
-  attentionIssues,
   clusterByRegion,
+  criticalIssues,
   deriveStatus,
   formatLastPMS,
   offlineDuration,
   ownerLabel,
   statusDot,
   statusLabel,
-  type AttentionIssue,
+  type CriticalIssue,
   type Node as SiteNode,
   type SiteStatus,
 } from "../data";
 
-const STATUSES: SiteStatus[] = ["online", "offline", "attention"];
+const STATUSES: SiteStatus[] = ["online", "offline", "critical"];
 
-const ISSUE_ICON: Record<AttentionIssue, typeof Fuel> = {
+const ISSUE_ICON: Record<CriticalIssue, typeof Fuel> = {
   genset: Fuel,
   lowVoltage: Zap,
   lowFuel: Gauge,
@@ -74,6 +76,7 @@ export function StoreList({
   onSelect,
 }: StoreListProps) {
   const itemRefs = useRef(new Map<string, HTMLButtonElement>());
+  const { toggleSidebar } = useSidebar();
 
   useEffect(() => {
     if (!selectedId) return;
@@ -85,16 +88,26 @@ export function StoreList({
   return (
     <Sidebar collapsible="offcanvas" variant="floating">
       <SidebarHeader className="gap-3 p-4">
-        <div>
-          <h2 className="text-foreground text-lg font-semibold tracking-tight">
-            Node locations
-          </h2>
-          <p className="text-muted-foreground text-sm">
-            {nodes.length} {nodes.length === 1 ? "node" : "nodes"} ·{" "}
-            {clusterByRegion(nodes)
-              .map(({ region, count }) => `${count} ${region}`)
-              .join(" · ")}
-          </p>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h2 className="text-foreground text-lg font-semibold tracking-tight">
+              Node locations
+            </h2>
+            <p className="text-muted-foreground text-sm">
+              {nodes.length} {nodes.length === 1 ? "node" : "nodes"} ·{" "}
+              {clusterByRegion(nodes)
+                .map(({ region, count }) => `${count} ${region}`)
+                .join(" · ")}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-label="Hide sidebar"
+            className="hover:bg-sidebar-accent text-sidebar-foreground hidden rounded-md p-1.5 transition-colors md:inline-flex"
+          >
+            <PanelLeftClose className="size-4" />
+          </button>
         </div>
         <div className="relative">
           <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
@@ -169,41 +182,35 @@ export function StoreList({
                           {node.name}
                         </span>
                         <span className="flex items-center gap-1.5 text-xs font-medium">
-                          <span
-                            className={cn(
-                              "rounded-full px-2 py-0.5",
-                              statusDot(status),
-                              status === "offline" && "font-bold",
-                            )}
-                          >
-                            {status === "attention" ? (
-                              <span className="text-black">
-                                {statusLabel(status)}
-                              </span>
-                            ) : (
-                              <span className="text-white">
-                                {statusLabel(status)}
-                              </span>
-                            )}
-                          </span>
-                          {status === "attention" && (
-                            <span className="flex items-center gap-1">
-                              {attentionIssues(node).map((issue) => {
-                                const Icon = ISSUE_ICON[issue];
-                                return (
-                                  <Icon
-                                    key={issue}
-                                    className="text-white size-3.5"
-                                  />
-                                );
-                              })}
-                            </span>
-                          )}
-                          {status === "offline" && (
-                            <span className="text-white font-bold">
-                              {offlineDuration(node.lastDataAt)}
-                            </span>
-                          )}
+<span
+  className={cn(
+    "rounded-full px-2 py-0.5",
+    statusDot(status),
+    status === "offline" && "font-bold",
+  )}
+>
+  <span className="text-black dark:text-white">
+    {statusLabel(status)}
+  </span>
+</span>
+{status === "critical" && (
+  <span className="flex items-center gap-1">
+    {criticalIssues(node).map((issue) => {
+      const Icon = ISSUE_ICON[issue];
+      return (
+        <Icon
+          key={issue}
+          className="text-black dark:text-white size-3.5"
+        />
+      );
+    })}
+  </span>
+)}
+{status === "offline" && (
+  <span className="text-red-600 dark:text-white">
+    {offlineDuration(node.lastDataAt)}
+  </span>
+)}
                         </span>
                       </div>
                       <div className="text-muted-foreground mt-2 space-y-1.5 text-xs font-normal tabular-nums">

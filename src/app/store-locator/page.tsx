@@ -14,7 +14,7 @@ export default function Page() {
   const [now, setNow] = useState(0);
 
   useEffect(() => {
-    const id = setInterval(() => setNow((n) => n + 1), 60_000);
+    const id = setInterval(() => setNow((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -22,7 +22,7 @@ export default function Page() {
     const counts: Record<SiteStatus, number> = {
       online: 0,
       offline: 0,
-      attention: 0,
+      critical: 0,
     };
     for (const node of nodes) counts[deriveStatus(node)] += 1;
     return counts;

@@ -4,11 +4,13 @@ import Hls from "hls.js";
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -18,8 +20,11 @@ import {
   Droplets,
   Fuel,
   MapPin,
+  Moon,
   Pin,
+  Search,
   Snowflake,
+  Sun,
   Thermometer,
   TriangleAlert,
   Video,
@@ -44,14 +49,24 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import type * as MapLibreGL from "maplibre-gl";
+import { useTheme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
 import {
   coolingLabel,
+  criticalDetails,
   deriveStatus,
   formatDetectedAt,
   hourlySeries,
   nodeNotifications,
+  nodeRecoveryMinutes,
+  offlineDetectedAt,
   offlineDuration,
   seriesLabel,
   seriesUnit,
@@ -67,6 +82,11 @@ import type { SiteStatus } from "../data";
 
 const SAMPLE_STREAM =
   "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+
+const SETTINGS_USER = {
+  name: "Infinivan Admin",
+  initials: "IA",
+};
 
 interface LocatorMapProps {
   nodes: SiteNode[];
@@ -98,7 +118,7 @@ const CHART_STACK_OFFSET = 28;
 const PIN_COLOR: Record<SiteStatus, string> = {
   online: "bg-emerald-500",
   offline: "bg-red-500",
-  attention: "bg-yellow-500",
+  critical: "bg-yellow-500",
 };
 
 const SERIES_STROKE: Record<SeriesKey, string> = {
@@ -107,6 +127,14 @@ const SERIES_STROKE: Record<SeriesKey, string> = {
   temperature: "stroke-red-500",
   humidity: "stroke-blue-500",
   coolingAmps: "stroke-cyan-500",
+};
+
+const SERIES_RGB: Record<SeriesKey, string> = {
+  voltage: "14,165,233",
+  fuelLevel: "245,158,11",
+  temperature: "239,68,68",
+  humidity: "59,130,246",
+  coolingAmps: "6,182,212",
 };
 
 const SERIES_ICON: Record<SeriesKey, typeof MapPin> = {
@@ -178,14 +206,14 @@ function FlyToSelected({ node }: { node?: SiteNode }) {
 const PIN_ICON: Record<SiteStatus, typeof MapPin> = {
   online: MapPin,
   offline: CircleMinus,
-  attention: TriangleAlert,
+  critical: TriangleAlert,
 };
 
 function StorePin({ status, active }: { status: SiteStatus; active: boolean }) {
   const Icon = PIN_ICON[status];
   return (
     <div className="relative">
-      {status === "attention" && (
+      {status === "critical" && (
         <span
           aria-hidden
           className="bg-yellow-500/50 pointer-events-none absolute inset-0 animate-ping rounded-full"
@@ -276,7 +304,7 @@ function CctvCard({
 
   return (
     <div
-      className="bg-background text-foreground absolute z-[1000] w-80 overflow-hidden rounded-lg border border-border shadow-2xl"
+      className="bg-background text-foreground absolute z-[1000] w-80 overflow-hidden rounded-lg border border-border shadow-2xl shadow-black/15 dark:shadow-black/40"
       style={{
         top: top + stackIndex * CCTV_STACK_OFFSET,
         left,
@@ -327,15 +355,18 @@ function useElementSize(ref: RefObject<HTMLElement | null>) {
 function HourlyChart({
   points,
   strokeClass,
+  fillRgb,
   onHover,
 }: {
   points: DataPoint[];
   strokeClass: string;
+  fillRgb: string;
   onHover?: (point: DataPoint | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const { width, height } = useElementSize(containerRef);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const gradientId = useId();
 
   if (width < 2 || height < 2) {
     return <div ref={containerRef} className="relative size-full" />;
@@ -368,6 +399,9 @@ function HourlyChart({
       `${i === 0 ? "M" : "L"}${x(i).toFixed(2)},${y(p.value).toFixed(2)}`,
     )
     .join(" ");
+
+  const baselineY = padTop + plotH;
+  const areaPath = `${path} L${x(count - 1).toFixed(2)},${baselineY.toFixed(2)} L${x(0).toFixed(2)},${baselineY.toFixed(2)} Z`;
 
   // Rotated labels take ~fontSize px horizontally each, so pick the smallest
   // interval (1h, 2h, 3h, ...) that fits the plot width.
@@ -470,6 +504,13 @@ function HourlyChart({
             />
           </g>
         )}
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={`rgb(${fillRgb})`} stopOpacity={0.4} />
+            <stop offset="100%" stopColor={`rgb(${fillRgb})`} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill={`url(#${gradientId})`} />
         <path
           d={path}
           fill="none"
@@ -564,7 +605,7 @@ function ChartCard({
 
   return (
     <div
-      className="bg-background text-foreground absolute z-[1000] flex flex-col overflow-hidden rounded-lg border border-border shadow-2xl"
+      className="bg-background text-foreground absolute z-[1000] flex flex-col overflow-hidden rounded-lg border border-border shadow-2xl shadow-black/15 dark:shadow-black/40"
       style={{
         top,
         left,
@@ -637,6 +678,7 @@ function ChartCard({
           <HourlyChart
             points={points}
             strokeClass={SERIES_STROKE[attribute]}
+            fillRgb={SERIES_RGB[attribute]}
             onHover={setHovered}
           />
         </div>
@@ -730,6 +772,510 @@ function ChartPositioner({
   }, [map, enabled, refreshKey, onUpdate, anchor, onAnchor]);
 
   return null;
+}
+
+function MapHandle({
+  mapRef,
+}: {
+  mapRef: RefObject<MapLibreGL.Map | null>;
+}) {
+  const { map } = useMap();
+
+  useEffect(() => {
+    mapRef.current = map;
+  }, [map, mapRef]);
+
+  return null;
+}
+
+type ToastKind = "offline" | "critical";
+interface ToastEntry {
+  node: SiteNode;
+  kind: ToastKind;
+}
+
+function StatusToastCard({
+  node,
+  kind,
+  now,
+  onSelect,
+  mapRef,
+  behind = false,
+  onHeightChange,
+  className,
+  style,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
+}: {
+  node: SiteNode;
+  kind: ToastKind;
+  now: number;
+  onSelect: (id: string) => void;
+  mapRef: RefObject<MapLibreGL.Map | null>;
+  behind?: boolean;
+  onHeightChange?: (height: number) => void;
+  className?: string;
+  style?: CSSProperties;
+  onPointerDown?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerMove?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerCancel?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+}) {
+  const [recoveryAt] = useState(
+    () => Date.now() + nodeRecoveryMinutes(node) * 60_000,
+  );
+  const remaining = Math.max(0, recoveryAt - now);
+  const hours = Math.floor(remaining / 3_600_000);
+  const minutes = Math.floor((remaining % 3_600_000) / 60_000);
+  const seconds = Math.floor((remaining % 60_000) / 1000);
+  const { date, time } = formatDetectedAt(offlineDetectedAt(node));
+  const cardRef = useRef<HTMLDivElement>(null);
+  const onHeightChangeRef = useRef(onHeightChange);
+
+  useEffect(() => {
+    onHeightChangeRef.current = onHeightChange;
+  });
+
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const update = () => onHeightChangeRef.current?.(el.offsetHeight);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div
+      ref={cardRef}
+      className={cn(
+        TOAST_MOTION_CLASS,
+        "bg-background text-foreground relative w-80 cursor-grab touch-none rounded-lg border border-border p-[13.8px] shadow-xl shadow-black/15 select-none active:cursor-grabbing",
+        kind === "critical" && "border-yellow-500/50",
+        kind === "offline" && "border-red-500/50",
+        className,
+      )}
+      style={style}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      onDoubleClick={() => {
+        const map = mapRef.current;
+        onSelect(node.id);
+        if (map) {
+          map.flyTo({
+            center: [node.lng, node.lat],
+            zoom: 14,
+            duration: 800,
+            essential: true,
+          });
+        }
+      }}
+    >
+      <div
+        className={cn(
+          "flex w-full items-start gap-3",
+          CONTENT_FADE_CLASS,
+          behind && "opacity-0",
+        )}
+      >
+        <span
+          className={cn(
+            "mt-1 size-2.5 shrink-0 rounded-full",
+            kind === "offline" ? "bg-red-500" : "bg-yellow-500",
+          )}
+        />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold">{node.name}</p>
+          {kind === "offline" ? (
+            <p className="text-muted-foreground truncate text-xs">
+              Offline since {date}, {time}
+            </p>
+          ) : (
+            <p className="text-muted-foreground truncate text-xs">
+              {criticalDetails(node).join(", ")}
+            </p>
+          )}
+        </div>
+        {kind === "offline" && (
+          <div className="shrink-0 text-right">
+            <p className="text-base font-bold tabular-nums">
+              {String(hours).padStart(2, "0")}:
+              {String(minutes).padStart(2, "0")}:
+              {String(seconds).padStart(2, "0")}
+            </p>
+            <p className="text-muted-foreground text-[10px] font-medium tracking-wide uppercase">
+              Downtime
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const TOAST_CARD_HEIGHT = 88;
+const TOAST_GAP = 12;
+const TOAST_PEEK = 12;
+const TOAST_SCALE_STEP = 0.1;
+const TOAST_MOTION_CLASS =
+  "transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform";
+const CONTENT_FADE_CLASS =
+  "transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]";
+
+function computeToasts(nodes: SiteNode[]): ToastEntry[] {
+  const toasts: ToastEntry[] = [];
+  for (const node of nodes) {
+    const status = deriveStatus(node);
+    if (status === "offline") toasts.push({ node, kind: "offline" });
+    else if (status === "critical") toasts.push({ node, kind: "critical" });
+  }
+  toasts.sort(
+    (a, b) => Number(a.kind === "critical") - Number(b.kind === "critical"),
+  );
+  return toasts;
+}
+
+function StatusToasts({
+  nodes,
+  onSelect,
+  mapRef,
+}: {
+  nodes: SiteNode[];
+  onSelect: (id: string) => void;
+  mapRef: RefObject<MapLibreGL.Map | null>;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  const [stackOpen, setStackOpen] = useState(false);
+  const [detached, setDetached] = useState<
+    Record<string, { left: number; top: number }>
+  >({});
+  const [drag, setDrag] = useState<{
+    id: string;
+    startX: number;
+    startY: number;
+    dx: number;
+    dy: number;
+    startLeft: number;
+    startTop: number;
+  } | null>(null);
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  const [entering, setEntering] = useState<Record<string, boolean>>({});
+  const [leaving, setLeaving] = useState<Record<string, boolean>>({});
+  const [list, setList] = useState<ToastEntry[]>(() => computeToasts(nodes));
+  const timersRef = useRef<Record<string, number>>({});
+  const prevListRef = useRef<ToastEntry[] | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+const toasts = useMemo(() => computeToasts(nodes), [nodes]);
+  const currentIds = new Set(toasts.map((t) => t.node.id));
+  const entryMap: Record<string, ToastEntry> = {};
+  for (const t of toasts) entryMap[t.node.id] = t;
+
+  useEffect(() => {
+    if (!prevListRef.current) {
+      prevListRef.current = toasts;
+      return;
+    }
+
+    for (const t of toasts) {
+      const timer = timersRef.current[t.node.id];
+      if (timer != null) {
+        clearTimeout(timer);
+        delete timersRef.current[t.node.id];
+      }
+    }
+    setLeaving((prev) => {
+      const next = { ...prev };
+      for (const t of toasts) delete next[t.node.id];
+      return next;
+    });
+
+    const currentIds = new Set(toasts.map((t) => t.node.id));
+    const prevIds = new Set(prevListRef.current.map((t) => t.node.id));
+    const changed =
+      prevIds.size !== currentIds.size ||
+      [...prevIds].some((id) => !currentIds.has(id)) ||
+      [...currentIds].some((id) => !prevIds.has(id));
+
+    if (!changed) {
+      prevListRef.current = toasts;
+      return;
+    }
+
+    setList((prev) => {
+      const kept = prev.filter((p) => currentIds.has(p.node.id));
+      const added = toasts.filter((t) => !prevIds.has(t.node.id));
+      const next = [...kept, ...added];
+      next.sort(
+        (a, b) => Number(a.kind === "critical") - Number(b.kind === "critical"),
+      );
+      return next;
+    });
+
+    const addedIds = toasts
+      .filter((t) => !prevIds.has(t.node.id))
+      .map((t) => t.node.id);
+    const removedIds = [...prevIds].filter((id) => !currentIds.has(id));
+
+    if (addedIds.length > 0) {
+      setEntering((prev) => {
+        const next = { ...prev };
+        for (const id of addedIds) next[id] = true;
+        return next;
+      });
+      requestAnimationFrame(() => {
+        setEntering((prev) => {
+          const next = { ...prev };
+          for (const id of addedIds) delete next[id];
+          return next;
+        });
+      });
+    }
+
+    for (const id of removedIds) {
+      setLeaving((prev) => ({ ...prev, [id]: true }));
+      if (!(id in timersRef.current)) {
+        timersRef.current[id] = window.setTimeout(() => {
+          delete timersRef.current[id];
+          setHeights((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+          setDetached((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+          setEntering((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+          setLeaving((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+          setList((prev) => prev.filter((p) => p.node.id !== id));
+        }, 650);
+      }
+    }
+
+    prevListRef.current = toasts;
+  }, [toasts]);
+
+  if (list.length === 0) return null;
+
+  const stacked = list.filter((t) => !detached[t.node.id]);
+  const floating = list.filter((t) => detached[t.node.id]);
+  const dragEntry = drag ? list.find((t) => t.node.id === drag.id) : undefined;
+  const isLeaving = (id: string) =>
+    leaving[id] === true && !currentIds.has(id);
+
+  const cardHeightOf = (id: string) => heights[id] ?? TOAST_CARD_HEIGHT;
+  const stackedCount = stacked.length;
+  const stackedHeights = stacked.map((t) => cardHeightOf(t.node.id));
+  const collapsedHeight =
+    (stackedCount ? stackedHeights[stackedCount - 1] : 0) +
+    Math.max(0, stackedCount - 1) * TOAST_PEEK;
+  const expandedHeight = stackedCount
+    ? stackedHeights.reduce((sum, h) => sum + h, 0) +
+      (stackedCount - 1) * TOAST_GAP
+    : 0;
+  const after: number[] = [];
+  let acc = 0;
+  for (let i = stackedCount - 1; i >= 0; i--) {
+    after[i] = acc;
+    acc += stackedHeights[i] + TOAST_GAP;
+  }
+  const deckHeight = stackOpen ? expandedHeight : collapsedHeight;
+
+  const beginDrag = (
+    e: ReactPointerEvent<HTMLDivElement>,
+    entry: ToastEntry,
+  ) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button")) return;
+    const overlay = wrapperRef.current;
+    if (!overlay) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const overlayRect = overlay.getBoundingClientRect();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setDrag({
+      id: entry.node.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      dx: 0,
+      dy: 0,
+      startLeft: rect.left - overlayRect.left,
+      startTop: rect.top - overlayRect.top,
+    });
+  };
+
+  const moveDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    setDrag((d) =>
+      d
+        ? { ...d, dx: e.clientX - d.startX, dy: e.clientY - d.startY }
+        : d,
+    );
+  };
+
+  const endDrag = () => {
+    if (!drag) return;
+    if (drag.dx !== 0 || drag.dy !== 0) {
+      setDetached((prev) => ({
+        ...prev,
+        [drag.id]: {
+          left: drag.startLeft + drag.dx,
+          top: drag.startTop + drag.dy,
+        },
+      }));
+    }
+    setDrag(null);
+  };
+
+  const cancelDrag = () => setDrag(null);
+
+  const pointerProps = (
+    entry: ToastEntry,
+  ): {
+    onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
+    onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
+    onPointerUp: () => void;
+    onPointerCancel: () => void;
+  } => ({
+    onPointerDown: (e) => beginDrag(e, entry),
+    onPointerMove: moveDrag,
+    onPointerUp: endDrag,
+    onPointerCancel: cancelDrag,
+  });
+
+  return (
+    <div
+      ref={wrapperRef}
+      className="pointer-events-none absolute inset-0 z-30"
+    >
+      {stackedCount > 0 && (
+        <div
+          className="pointer-events-auto absolute right-4 bottom-4 w-80 overflow-y-auto"
+          style={{
+            height: deckHeight,
+            maxHeight: "calc(100% - 2rem)",
+            transition: "height 150ms ease",
+          }}
+          onPointerEnter={() => setStackOpen(true)}
+          onPointerLeave={() => setStackOpen(false)}
+        >
+          <div className="relative w-full" style={{ height: deckHeight }}>
+            {stacked.map((entry, index) => {
+              const id = entry.node.id;
+              const live = entryMap[id];
+              const depth = stackedCount - 1 - index;
+              const scale = Math.max(0, 1 - TOAST_SCALE_STEP * depth);
+              const height = stackedHeights[index];
+              const leave = isLeaving(id);
+              const enter = entering[id] === true && !leave;
+              const active = drag?.id === id;
+              let transform: string;
+              if (leave || enter) {
+                transform = "translateY(150%)";
+              } else if (stackOpen) {
+                transform = `translateY(${-after[index]}px)`;
+              } else {
+                transform = `translateY(${-(
+                  depth * TOAST_PEEK +
+                  (1 - scale) * height
+                ).toFixed(2)}px) scale(${scale.toFixed(2)})`;
+              }
+              const liveEntry = live ?? entry;
+              return (
+                <StatusToastCard
+                  key={id}
+                  node={liveEntry.node}
+                  kind={liveEntry.kind}
+                  now={now}
+                  onSelect={onSelect}
+                  mapRef={mapRef}
+                  behind={!stackOpen && depth > 0 && !leave}
+                  onHeightChange={(h) =>
+                    setHeights((prev) =>
+                      prev[id] === h ? prev : { ...prev, [id]: h },
+                    )
+                  }
+                  className="absolute bottom-0 left-0"
+                  style={{
+                    zIndex: index,
+                    opacity: active || leave ? 0 : undefined,
+                    transform,
+                    transformOrigin: "bottom center",
+                  }}
+                  {...pointerProps(entry)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {dragEntry && drag && (
+        <StatusToastCard
+          key={`drag-${dragEntry.node.id}`}
+          node={entryMap[dragEntry.node.id]?.node ?? dragEntry.node}
+          kind={entryMap[dragEntry.node.id]?.kind ?? dragEntry.kind}
+          now={now}
+          onSelect={onSelect}
+          mapRef={mapRef}
+          className="pointer-events-none absolute"
+          style={{
+            left: drag.startLeft + drag.dx,
+            top: drag.startTop + drag.dy,
+            zIndex: 9999,
+          }}
+        />
+      )}
+
+      {floating.map((entry) => {
+        const id = entry.node.id;
+        const live = entryMap[id];
+        const pos = detached[id];
+        const leave = isLeaving(id);
+        const active = drag?.id === id;
+        const liveEntry = live ?? entry;
+        return (
+          <StatusToastCard
+            key={id}
+            node={liveEntry.node}
+            kind={liveEntry.kind}
+            now={now}
+            onSelect={onSelect}
+            mapRef={mapRef}
+            className={cn(
+              "pointer-events-auto absolute",
+              leave && "pointer-events-none",
+            )}
+            style={{
+              left: pos.left,
+              top: pos.top,
+              zIndex: 300,
+              opacity: active || leave ? 0 : undefined,
+            }}
+            {...pointerProps(entry)}
+          />
+        );
+      })}
+    </div>
+  );
 }
 
 function NotificationDrawer({
@@ -831,6 +1377,91 @@ function NotificationDrawer({
   );
 }
 
+function SettingsDrawer({
+  open,
+  theme,
+  onToggleTheme,
+  onClose,
+}: {
+  open: boolean;
+  theme: "light" | "dark";
+  onToggleTheme: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <div
+        className={cn(
+          "bg-black/40 absolute inset-0 z-40 transition-opacity duration-300",
+          open ? "opacity-100" : "pointer-events-none opacity-0",
+        )}
+        onClick={onClose}
+        aria-hidden
+      />
+      <aside
+        className={cn(
+          "bg-background text-foreground absolute inset-y-0 right-0 z-50 flex w-96 max-w-full flex-col shadow-2xl transition-transform duration-300",
+          open ? "translate-x-0" : "translate-x-full",
+        )}
+      >
+        <header className="bg-sidebar text-sidebar-foreground flex items-center justify-between gap-2 border-b border-sidebar-border px-4 py-3">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold">Settings</h2>
+            <p className="text-sidebar-foreground/70 truncate text-xs">
+              Control panel
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close settings"
+            className="hover:bg-sidebar-accent text-sidebar-foreground rounded-md p-1.5 transition-colors"
+          >
+            <X className="size-4" />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Appearance</p>
+                <p className="text-muted-foreground text-xs">
+                  Switch between light and dark theme
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={theme === "dark"}
+                onClick={onToggleTheme}
+                className={cn(
+                  "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors",
+                  theme === "dark"
+                    ? "border-slate-600 bg-slate-700"
+                    : "border-amber-300 bg-amber-200",
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex size-5 translate-x-1 items-center justify-center rounded-full bg-background shadow-sm transition-transform",
+                    theme === "dark" && "translate-x-6",
+                  )}
+                >
+                  {theme === "dark" ? (
+                    <Moon className="size-3.5" />
+                  ) : (
+                    <Sun className="size-3.5" />
+                  )}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+}
+
 function AttributeRow({
   icon: Icon,
   label,
@@ -917,15 +1548,19 @@ export function LocatorMap({
   center,
 }: LocatorMapProps) {
   const selected = nodes.find((node) => node.id === selectedId);
+  const { open: sidebarOpen, toggleSidebar } = useSidebar();
+  const mapRef = useRef<MapLibreGL.Map | null>(null);
   const [cctvCards, setCctvCards] = useState<CctvCardData[]>([]);
   const [chartCards, setChartCards] = useState<ChartCardData[]>([]);
   const [chartPos, setChartPos] = useState({ left: 30, top: 30 });
   const [cctvPos, setCctvPos] = useState({ left: CCTV_MARGIN, top: CCTV_MARGIN });
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { theme, toggleTheme } = useTheme();
   const [, setNow] = useState(0);
 
   useEffect(() => {
-    const id = setInterval(() => setNow((n) => n + 1), 60_000);
+    const id = setInterval(() => setNow((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -1004,26 +1639,77 @@ export function LocatorMap({
   return (
     <div ref={overlayRef} className="relative h-full overflow-hidden">
       <SidebarTrigger className="bg-background absolute top-3 left-3 z-10 border shadow-sm md:hidden" />
-      <button
-        type="button"
-        onClick={() => setNotificationsOpen((open) => !open)}
-        aria-label={
-          notificationsOpen ? "Close notifications" : "Open notifications"
-        }
-        className="bg-sidebar text-sidebar-foreground absolute top-[30px] right-[30px] z-20 flex size-11 items-center justify-center rounded-full border border-sidebar-border shadow-md transition-colors hover:bg-sidebar-accent"
-      >
-        <Bell className="size-5" />
-        {notifications.length > 0 && (
-          <span className="bg-red-500 absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white">
-            {notifications.length}
-          </span>
-        )}
-      </button>
+      {!sidebarOpen && (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={toggleSidebar}
+                aria-label="Show sidebar"
+                className="bg-sidebar text-sidebar-foreground absolute top-[30px] left-[30px] z-20 hidden size-11 items-center justify-center rounded-full border border-sidebar-border shadow-md transition-colors hover:bg-sidebar-accent md:flex"
+              >
+                <Search className="size-5" />
+              </button>
+            }
+          />
+          <TooltipContent side="bottom">Search nodes</TooltipContent>
+        </Tooltip>
+      )}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={() => {
+                setSettingsOpen((open) => !open);
+                setNotificationsOpen(false);
+              }}
+              aria-label={settingsOpen ? "Close settings" : "Open settings"}
+              aria-expanded={settingsOpen}
+              className="bg-sidebar text-sidebar-foreground absolute top-[30px] right-[84px] z-20 flex size-11 items-center justify-center rounded-full border border-sidebar-border shadow-md transition-colors hover:bg-sidebar-accent"
+            >
+              <span className="bg-gradient-to-br from-emerald-500 to-teal-600 flex size-8 items-center justify-center rounded-full text-[11px] font-bold text-white">
+                {SETTINGS_USER.initials}
+              </span>
+            </button>
+          }
+        />
+        <TooltipContent side="bottom">Show user settings</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={() => {
+                setNotificationsOpen((open) => !open);
+                setSettingsOpen(false);
+              }}
+              aria-label={
+                notificationsOpen ? "Close notifications" : "Open notifications"
+              }
+              className="bg-sidebar text-sidebar-foreground absolute top-[30px] right-[30px] z-20 flex size-11 items-center justify-center rounded-full border border-sidebar-border shadow-md transition-colors hover:bg-sidebar-accent"
+            >
+              <Bell className="size-5" />
+              {notifications.length > 0 && (
+                <span className="bg-red-500 absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white">
+                  {notifications.length}
+                </span>
+              )}
+            </button>
+          }
+        />
+        <TooltipContent side="bottom">
+          Show event notifications
+        </TooltipContent>
+      </Tooltip>
       <SidebarTrigger className="bg-background absolute top-3 left-3 z-10 border shadow-sm md:hidden" />
 
       <Map center={center} zoom={7} minZoom={3} maxZoom={17}>
         <MapControls showFullscreen showCompass />
         <FlyToSelected node={selected} />
+        <MapHandle mapRef={mapRef} />
         <ChartDismisser
           open={chartCards.length > 0}
           onDismiss={handleClearSelection}
@@ -1081,25 +1767,36 @@ export function LocatorMap({
               return (
                 <span
                   className={cn(
-                    "mt-1 flex items-center gap-1.5 text-xs font-medium",
+                    "mt-1 flex items-start gap-1.5 text-xs font-medium",
                     status === "offline" && "font-bold",
                   )}
                 >
                   <span
                     className={cn(
-                      "size-2.5 rounded-full",
+                      "mt-0.5 size-2.5 rounded-full",
                       statusDot(status),
                     )}
                   />
-                  {status === "offline" ? (
-                    <>
-                      <span className="text-white">offline:</span>
-                      <span className="text-red-500">
-                        {offlineDuration(selected.lastDataAt)}
-                      </span>
-                    </>
-                  ) : (
-                    statusLabel(status)
+{status === "critical" ? (
+                      <>
+                        <span className="text-amber-600 dark:text-amber-400">
+                          Critical:
+                        </span>
+                        <span className="text-amber-600 dark:text-amber-400">
+                          {criticalDetails(selected).join(", ")}
+                        </span>
+                      </>
+                    ) : status === "offline" ? (
+                      <>
+                        <span className="text-red-500">offline:</span>
+                        <span className="text-red-500">
+                          {offlineDuration(selected.lastDataAt)}
+                        </span>
+                      </>
+                    ) : (
+                    <span className="text-emerald-600 dark:text-emerald-500">
+                      {statusLabel(status)}
+                    </span>
                   )}
                 </span>
               );
@@ -1221,10 +1918,19 @@ export function LocatorMap({
         );
       })}
 
+      <StatusToasts nodes={nodes} onSelect={onSelect} mapRef={mapRef} />
+
       <NotificationDrawer
         open={notificationsOpen}
         notifications={notifications}
         onClose={() => setNotificationsOpen(false)}
+      />
+
+      <SettingsDrawer
+        open={settingsOpen}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onClose={() => setSettingsOpen(false)}
       />
     </div>
   );
